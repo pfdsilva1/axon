@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from axon.core.ingestion.pipeline import reindex_files, run_pipeline
-from axon.core.ingestion.watcher import _reindex_files
+from axon.core.ingestion.watcher import (
+    _reindex_files,
+    _get_head_sha,
+    _compute_dirty_node_ids,
+    QUIET_PERIOD,
+)
 from axon.core.ingestion.walker import FileEntry, read_file
 from axon.core.storage.kuzu_backend import KuzuBackend
 
@@ -196,7 +202,7 @@ class TestWatcherReindexFiles:
             encoding="utf-8",
         )
 
-        count = _reindex_files([app_path], tmp_repo, storage)
+        count, paths = _reindex_files([app_path], tmp_repo, storage)
 
         assert count == 1
         node = storage.get_node("function:src/app.py:hello")
@@ -214,7 +220,7 @@ class TestWatcherReindexFiles:
         cached = cache_dir / "module.cpython-311.pyc"
         cached.write_bytes(b"\x00")
 
-        count = _reindex_files([cached], tmp_repo, storage)
+        count, _paths = _reindex_files([cached], tmp_repo, storage)
 
         assert count == 0
 
@@ -226,7 +232,7 @@ class TestWatcherReindexFiles:
         readme = tmp_repo / "README.md"
         readme.write_text("# hello", encoding="utf-8")
 
-        count = _reindex_files([readme], tmp_repo, storage)
+        count, _paths = _reindex_files([readme], tmp_repo, storage)
 
         assert count == 0
 
@@ -241,7 +247,7 @@ class TestWatcherReindexFiles:
 
         deleted_path.unlink()
 
-        count = _reindex_files([deleted_path], tmp_repo, storage)
+        count, _paths = _reindex_files([deleted_path], tmp_repo, storage)
 
         # Returns 0 because file no longer exists (was handled as deletion).
         assert count == 0
@@ -261,10 +267,85 @@ class TestWatcherReindexFiles:
             encoding="utf-8",
         )
 
-        count = _reindex_files(
+        count, _paths = _reindex_files(
             [tmp_repo / "src" / "app.py", tmp_repo / "src" / "utils.py"],
             tmp_repo,
             storage,
         )
 
         assert count == 2
+
+
+# ---------------------------------------------------------------------------
+# Tests: _get_head_sha
+# ---------------------------------------------------------------------------
+
+
+class TestGetHeadSha:
+    """_get_head_sha returns the current git HEAD."""
+
+    def test_returns_sha_in_git_repo(self, tmp_repo: Path) -> None:
+        import os
+
+        subprocess.run(["git", "init"], cwd=tmp_repo, capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=tmp_repo, capture_output=True)
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "test",
+            "GIT_AUTHOR_EMAIL": "t@t",
+            "GIT_COMMITTER_NAME": "test",
+            "GIT_COMMITTER_EMAIL": "t@t",
+        }
+        subprocess.run(
+            ["git", "commit", "-m", "init"],
+            cwd=tmp_repo,
+            capture_output=True,
+            env=env,
+        )
+        sha = _get_head_sha(tmp_repo)
+        assert sha is not None
+        assert len(sha) == 40
+
+    def test_returns_none_outside_git_repo(self, tmp_path: Path) -> None:
+        sha = _get_head_sha(tmp_path)
+        assert sha is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: _reindex_files return type
+# ---------------------------------------------------------------------------
+
+
+class TestReindexFilesReturnType:
+    """_reindex_files returns (count, set_of_paths)."""
+
+    def test_returns_count_and_paths(
+        self, tmp_repo: Path, storage: KuzuBackend
+    ) -> None:
+        run_pipeline(tmp_repo, storage, full=True, embeddings=False)
+
+        changed = [tmp_repo / "src" / "app.py"]
+        count, paths = _reindex_files(changed, tmp_repo, storage)
+        assert count == 1
+        assert "src/app.py" in paths
+
+
+# ---------------------------------------------------------------------------
+# Tests: _compute_dirty_node_ids
+# ---------------------------------------------------------------------------
+
+
+class TestComputeDirtyNodeIds:
+    """_compute_dirty_node_ids finds nodes in dirty files + their CALLS neighbors."""
+
+    def test_includes_dirty_file_nodes(
+        self, tmp_repo: Path, storage: KuzuBackend
+    ) -> None:
+        run_pipeline(tmp_repo, storage, full=True, embeddings=False)
+
+        dirty_ids = _compute_dirty_node_ids(storage, {"src/app.py"})
+        assert any("app.py" in nid for nid in dirty_ids)
+
+    def test_returns_empty_for_empty_input(self, storage: KuzuBackend) -> None:
+        result = _compute_dirty_node_ids(storage, set())
+        assert result == set()
