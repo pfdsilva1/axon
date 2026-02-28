@@ -2,10 +2,21 @@ import { Header } from '@/components/layout/Header';
 import { StatusBar } from '@/components/layout/StatusBar';
 import { PanelLayout } from '@/components/layout/PanelLayout';
 import { ExplorerSidebar } from '@/components/explorer/ExplorerSidebar';
+import { GraphCanvas } from '@/components/graph/GraphCanvas';
+import { DetailPanel } from '@/components/detail/DetailPanel';
+import { AnalysisView } from '@/components/analysis/AnalysisView';
+import { CypherView } from '@/components/cypher/CypherView';
+import { CommandPalette } from '@/components/shared/CommandPalette';
+import { useKeyboard } from '@/hooks/useKeyboard';
 import { useViewStore } from '@/stores/viewStore';
+import { useSSE } from '@/hooks/useSSE';
 
 export function App() {
   const activeView = useViewStore((s) => s.activeView);
+  useKeyboard();
+
+  // Subscribe to SSE events for live graph reload on reindex.
+  useSSE();
 
   return (
     <div
@@ -17,33 +28,15 @@ export function App() {
         {activeView === 'explorer' && (
           <PanelLayout
             left={<ExplorerSidebar />}
-            center={
-              <div
-                className="flex items-center justify-center h-full"
-                style={{ color: 'var(--text-dimmed)' }}
-              >
-                Graph Canvas
-              </div>
-            }
-            right={
-              <div className="p-2" style={{ color: 'var(--text-secondary)' }}>
-                Detail Panel
-              </div>
-            }
+            center={<GraphCanvas />}
+            right={<DetailPanel />}
           />
         )}
-        {activeView === 'analysis' && (
-          <div className="p-4" style={{ color: 'var(--text-secondary)' }}>
-            Analysis Dashboard
-          </div>
-        )}
-        {activeView === 'cypher' && (
-          <div className="p-4" style={{ color: 'var(--text-secondary)' }}>
-            Cypher Console
-          </div>
-        )}
+        {activeView === 'analysis' && <AnalysisView />}
+        {activeView === 'cypher' && <CypherView />}
       </main>
       <StatusBar />
+      <CommandPalette />
     </div>
   );
 }
