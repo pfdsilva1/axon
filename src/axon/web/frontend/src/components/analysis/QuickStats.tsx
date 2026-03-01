@@ -79,9 +79,9 @@ export function QuickStats({
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))',
-        gap: 12,
-        padding: 8,
+        gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))',
+        gap: 8,
+        padding: 6,
       }}
     >
       <StatCell label="Files" value={files} />

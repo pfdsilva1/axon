@@ -76,7 +76,7 @@ export function QueryEditor({ value, onChange, onExecute, loading }: QueryEditor
           className="text-[10px]"
           style={{ color: 'var(--text-dimmed)', fontFamily: "'JetBrains Mono', monospace" }}
         >
-          \u2318\u21B5
+          {'\u2318\u21B5'}
         </span>
 
         <div className="flex-1" />

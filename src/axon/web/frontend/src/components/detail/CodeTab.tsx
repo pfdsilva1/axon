@@ -225,7 +225,7 @@ function ShikiRenderedCode({
   // Shiki outputs a <pre><code> block. We need to inject line numbers and
   // highlight the active range. Parse the lines from the HTML.
   // Shiki 1.x produces one <span class="line">...</span> per line inside the code block.
-  const lineRegex = /<span class="line">(.*?)<\/span>/g;
+  const lineRegex = /<span class="line">(.*)<\/span>/gm;
   const lineMatches: string[] = [];
   let match: RegExpExecArray | null;
   while ((match = lineRegex.exec(html)) !== null) {

@@ -8,8 +8,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { MultiDirectedGraph } from 'graphology';
-import { graphApi } from '@/api/client';
+import { analysisApi, graphApi } from '@/api/client';
 import { buildGraphology } from '@/lib/graphAdapter';
+import { useDataStore } from '@/stores/dataStore';
 import { useGraphStore } from '@/stores/graphStore';
 
 export interface UseGraphReturn {
@@ -31,6 +32,9 @@ export function useGraph(): UseGraphReturn {
   const [error, setError] = useState<string | null>(null);
   const setGraphData = useGraphStore((s) => s.setGraphData);
   const setOverview = useGraphStore((s) => s.setOverview);
+  const setCommunities = useGraphStore((s) => s.setCommunities);
+  const setDeadCode = useDataStore((s) => s.setDeadCode);
+  const setHealthScore = useDataStore((s) => s.setHealthScore);
 
   useEffect(() => {
     let cancelled = false;
@@ -40,9 +44,12 @@ export function useGraph(): UseGraphReturn {
         setLoading(true);
         setError(null);
 
-        const [graphData, overview] = await Promise.all([
+        const [graphData, overview, commResp, deadResp, healthResp] = await Promise.all([
           graphApi.getGraph(),
           graphApi.getOverview(),
+          analysisApi.getCommunities().catch(() => null),
+          analysisApi.getDeadCode().catch(() => null),
+          analysisApi.getHealth().catch(() => null),
         ]);
 
         if (cancelled) return;
@@ -51,8 +58,10 @@ export function useGraph(): UseGraphReturn {
         graphRef.current = graph;
 
         setGraphData(graphData.nodes, graphData.edges);
-
         setOverview(overview);
+        if (commResp) setCommunities(commResp.communities);
+        if (deadResp) setDeadCode(deadResp);
+        if (healthResp) setHealthScore(healthResp);
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : 'Failed to load graph');
@@ -68,7 +77,7 @@ export function useGraph(): UseGraphReturn {
     return () => {
       cancelled = true;
     };
-  }, [setGraphData, setOverview]);
+  }, [setGraphData, setOverview, setCommunities, setDeadCode, setHealthScore]);
 
   return { graphRef, loading, error };
 }

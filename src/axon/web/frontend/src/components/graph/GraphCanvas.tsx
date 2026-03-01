@@ -12,6 +12,8 @@ import Sigma from 'sigma';
 import type { MultiDirectedGraph } from 'graphology';
 import { createNodeBorderProgram } from '@sigma/node-border';
 import FA2LayoutSupervisor from 'graphology-layout-forceatlas2/worker';
+import circular from 'graphology-layout/circular';
+import circlePack from 'graphology-layout/circlepack';
 import { useGraphStore } from '@/stores/graphStore';
 import { useGraph } from '@/hooks/useGraph';
 import { cn } from '@/lib/utils';
@@ -33,49 +35,44 @@ type PositionMap = Map<string, { x: number; y: number }>;
 /**
  * Compute a hierarchical top-to-bottom tree layout.
  *
- * 1. Find root nodes (nodes with no incoming edges).
- * 2. Assign layers via BFS from roots.
- * 3. Space nodes evenly within each layer.
+ * Uses **undirected BFS from the highest-degree hub node** so the graph
+ * fans out into concentric layers of increasing width — layer 0 has 1
+ * node, layer 1 has ~20, layer 2 has ~200, etc. This avoids the flat-line
+ * bug caused by directed-edge filtering (which made ~80% of nodes roots
+ * at layer 0).
+ *
+ * Disconnected nodes are placed on an extra bottom layer.
+ * Within each layer, nodes are sorted by their `directory` attribute to
+ * keep related symbols together.
  */
 function computeTreeLayout(graph: MultiDirectedGraph): PositionMap {
   const positions: PositionMap = new Map();
-  const layers: Map<string, number> = new Map();
   const nodeIds: string[] = [];
   graph.forEachNode((id) => nodeIds.push(id));
 
   if (nodeIds.length === 0) return positions;
 
-  // Find root nodes: nodes with in-degree 0.
-  const roots: string[] = [];
+  // Find the hub node: highest total degree.
+  let hubNode = nodeIds[0];
+  let maxDeg = 0;
   for (const id of nodeIds) {
-    if (graph.inDegree(id) === 0) {
-      roots.push(id);
+    const deg = graph.degree(id);
+    if (deg > maxDeg) {
+      maxDeg = deg;
+      hubNode = id;
     }
   }
 
-  // If no roots found (cycles only), pick the node with highest out-degree.
-  if (roots.length === 0) {
-    let bestNode = nodeIds[0];
-    let bestOut = 0;
-    for (const id of nodeIds) {
-      const out = graph.outDegree(id);
-      if (out > bestOut) {
-        bestOut = out;
-        bestNode = id;
-      }
-    }
-    roots.push(bestNode);
-  }
-
-  // BFS to assign layer depths.
-  const queue: string[] = [...roots];
-  for (const r of roots) layers.set(r, 0);
+  // Undirected BFS from the hub — every edge counts, regardless of type.
+  const layers = new Map<string, number>();
+  layers.set(hubNode, 0);
+  const queue: string[] = [hubNode];
 
   while (queue.length > 0) {
     const current = queue.shift()!;
     const depth = layers.get(current)!;
 
-    graph.forEachOutNeighbor(current, (neighbor) => {
+    graph.forEachNeighbor(current, (neighbor) => {
       if (!layers.has(neighbor)) {
         layers.set(neighbor, depth + 1);
         queue.push(neighbor);
@@ -83,39 +80,48 @@ function computeTreeLayout(graph: MultiDirectedGraph): PositionMap {
     });
   }
 
-  // Assign remaining unreachable nodes to layer 0.
+  // Disconnected nodes → maxLayer + 1.
+  const maxReachable = layers.size > 0 ? Math.max(...layers.values()) : 0;
   for (const id of nodeIds) {
     if (!layers.has(id)) {
-      layers.set(id, 0);
+      layers.set(id, maxReachable + 1);
     }
   }
 
-  // Group nodes by layer.
-  const layerGroups: Map<number, string[]> = new Map();
+  // Group nodes by layer, sorting within each layer by directory for cohesion.
+  const layerGroups = new Map<number, string[]>();
   for (const [id, depth] of layers) {
     const group = layerGroups.get(depth) ?? [];
     group.push(id);
     layerGroups.set(depth, group);
   }
 
+  for (const [, members] of layerGroups) {
+    members.sort((a, b) => {
+      const da = (graph.getNodeAttribute(a, 'directory') as string) ?? '';
+      const db = (graph.getNodeAttribute(b, 'directory') as string) ?? '';
+      return da.localeCompare(db);
+    });
+  }
+
   const maxLayer = Math.max(...layerGroups.keys());
   const LAYER_SPACING = 150;
-  const NODE_SPACING = 80;
+
+  // Adaptive horizontal spacing based on the widest layer.
+  const widestCount = Math.max(...[...layerGroups.values()].map((g) => g.length));
+  const nodeSpacing = Math.max(30, Math.min(80, 2400 / widestCount));
 
   for (const [depth, members] of layerGroups) {
     const y = depth * LAYER_SPACING;
-    const totalWidth = (members.length - 1) * NODE_SPACING;
+    const totalWidth = (members.length - 1) * nodeSpacing;
     const startX = -totalWidth / 2;
 
     for (let i = 0; i < members.length; i++) {
-      positions.set(members[i], {
-        x: startX + i * NODE_SPACING,
-        y,
-      });
+      positions.set(members[i], { x: startX + i * nodeSpacing, y });
     }
   }
 
-  // Center the layout around the origin.
+  // Center around origin.
   if (maxLayer >= 0) {
     const centerY = (maxLayer * LAYER_SPACING) / 2;
     for (const [id, pos] of positions) {
@@ -127,33 +133,41 @@ function computeTreeLayout(graph: MultiDirectedGraph): PositionMap {
 }
 
 /**
- * Compute a radial layout centered on the most-connected node.
+ * Compute a radial layout with adaptive ring sizing.
  *
- * 1. Find the node with the highest degree (center).
- * 2. Place immediate neighbors on the first ring.
- * 3. Place 2-hop neighbors on the second ring, and so on via BFS.
- * 4. Spread nodes evenly around each ring.
+ * When a `centerNodeId` is provided (the selected node), it becomes the
+ * center — creating a true ego-graph view. Otherwise falls back to the
+ * highest-degree node.
+ *
+ * Each ring's radius adapts to the number of nodes on it, so outer rings
+ * with many nodes expand instead of packing tightly. Rings are offset by
+ * half an arc-step to prevent radial stacking.
  */
-function computeRadialLayout(graph: MultiDirectedGraph): PositionMap {
+function computeRadialLayout(graph: MultiDirectedGraph, centerNodeId?: string | null): PositionMap {
   const positions: PositionMap = new Map();
   const nodeIds: string[] = [];
   graph.forEachNode((id) => nodeIds.push(id));
 
   if (nodeIds.length === 0) return positions;
 
-  // Find the most-connected node.
-  let centerNode = nodeIds[0];
-  let maxDegree = 0;
-  for (const id of nodeIds) {
-    const deg = graph.degree(id);
-    if (deg > maxDegree) {
-      maxDegree = deg;
-      centerNode = id;
+  // Choose center: selected node or highest-degree fallback.
+  let centerNode: string;
+  if (centerNodeId && graph.hasNode(centerNodeId)) {
+    centerNode = centerNodeId;
+  } else {
+    centerNode = nodeIds[0];
+    let maxDegree = 0;
+    for (const id of nodeIds) {
+      const deg = graph.degree(id);
+      if (deg > maxDegree) {
+        maxDegree = deg;
+        centerNode = id;
+      }
     }
   }
 
   // BFS from center to assign ring levels.
-  const ringMap: Map<string, number> = new Map();
+  const ringMap = new Map<string, number>();
   ringMap.set(centerNode, 0);
   const queue: string[] = [centerNode];
 
@@ -169,34 +183,46 @@ function computeRadialLayout(graph: MultiDirectedGraph): PositionMap {
     });
   }
 
-  // Assign any unreachable nodes to ring 1.
-  for (const id of nodeIds) {
-    if (!ringMap.has(id)) {
-      ringMap.set(id, 1);
-    }
-  }
-
-  // Group by ring.
-  const ringGroups: Map<number, string[]> = new Map();
+  // Group by ring. Unreachable nodes go to a separate orphan ring.
+  const ringGroups = new Map<number, string[]>();
+  let maxRing = 0;
   for (const [id, ring] of ringMap) {
     const group = ringGroups.get(ring) ?? [];
     group.push(id);
     ringGroups.set(ring, group);
+    if (ring > maxRing) maxRing = ring;
+  }
+
+  const orphans = nodeIds.filter((id) => !ringMap.has(id));
+  if (orphans.length > 0) {
+    ringGroups.set(maxRing + 1, orphans);
   }
 
   // Place center node at origin.
   positions.set(centerNode, { x: 0, y: 0 });
 
-  const RADIUS_STEP = 200;
+  // Adaptive radius: each ring expands based on how many nodes it has,
+  // with a minimum gap of 100 from the previous ring.
+  let prevRadius = 0;
+  const sortedRings = [...ringGroups.keys()].filter((r) => r > 0).sort((a, b) => a - b);
 
-  for (const [ring, members] of ringGroups) {
-    if (ring === 0) continue; // Already placed at origin.
-
-    const radius = ring * RADIUS_STEP;
+  for (const ring of sortedRings) {
+    const members = ringGroups.get(ring)!;
     const count = members.length;
 
+    // Radius must be large enough to fit `count` nodes without overlap.
+    // 80 units per node slot provides decent spacing at scale.
+    const circumferenceNeeded = count * 80;
+    const radiusFromCount = circumferenceNeeded / (2 * Math.PI);
+    const radius = Math.max(prevRadius + 150, radiusFromCount);
+    prevRadius = radius;
+
+    // Offset each ring by half an arc-step to prevent radial stacking.
+    const arcStep = (2 * Math.PI) / count;
+    const ringOffset = (ring % 2) * (arcStep / 2);
+
     for (let i = 0; i < count; i++) {
-      const angle = (2 * Math.PI * i) / count;
+      const angle = ringOffset + arcStep * i;
       positions.set(members[i], {
         x: radius * Math.cos(angle),
         y: radius * Math.sin(angle),
@@ -211,14 +237,17 @@ function computeRadialLayout(graph: MultiDirectedGraph): PositionMap {
  * Animate node positions from their current locations to new target positions
  * over a given duration using requestAnimationFrame with ease-out cubic.
  *
- * Returns the requestAnimationFrame ID so the caller can cancel if needed.
+ * Writes the current frame ID to `frameRef` on **every tick** so that
+ * `cancelAnimationFrame(frameRef.current)` always cancels the latest
+ * scheduled frame — fixing rapid layout-switch glitches.
  */
 function animatePositions(
   graph: MultiDirectedGraph,
   targets: PositionMap,
   duration: number,
+  frameRef: React.MutableRefObject<number>,
   onComplete?: () => void,
-): number {
+): void {
   // Capture starting positions.
   const starts: PositionMap = new Map();
   graph.forEachNode((id, attrs) => {
@@ -226,7 +255,6 @@ function animatePositions(
   });
 
   const t0 = performance.now();
-  let frameId = 0;
 
   function tick() {
     const elapsed = performance.now() - t0;
@@ -244,14 +272,13 @@ function animatePositions(
     });
 
     if (progress < 1) {
-      frameId = requestAnimationFrame(tick);
+      frameRef.current = requestAnimationFrame(tick);
     } else {
       onComplete?.();
     }
   }
 
-  frameId = requestAnimationFrame(tick);
-  return frameId;
+  frameRef.current = requestAnimationFrame(tick);
 }
 
 // ---------------------------------------------------------------------------
@@ -279,6 +306,7 @@ export function GraphCanvas({ className }: GraphCanvasProps) {
 
   const selectedNodeId = useGraphStore((s) => s.selectedNodeId);
   const hoveredNodeId = useGraphStore((s) => s.hoveredNodeId);
+  const highlightedNodeIds = useGraphStore((s) => s.highlightedNodeIds);
   const visibleNodeTypes = useGraphStore((s) => s.visibleNodeTypes);
   const visibleEdgeTypes = useGraphStore((s) => s.visibleEdgeTypes);
   const selectNode = useGraphStore((s) => s.selectNode);
@@ -312,23 +340,49 @@ export function GraphCanvas({ className }: GraphCanvasProps) {
 
   /** Toggle the ForceAtlas2 layout on/off (only relevant in force mode). */
   const toggleLayout = useCallback(() => {
+    const graph = graphRef.current;
     const layout = layoutRef.current;
-    if (!layout) return;
+    if (!layout || !graph) return;
 
     if (layout.isRunning()) {
       layout.stop();
       setLayoutRunning(false);
     } else {
-      layout.start();
+      // Kill the stale supervisor and create a fresh one with weaker settings.
+      // This resets FA2's internal speed accumulator, preventing vibration on
+      // resume after the layout has already converged.
+      layout.kill();
+      const fresh = new FA2LayoutSupervisor(graph, {
+        settings: {
+          gravity: 0.5,
+          scalingRatio: 5,
+          strongGravityMode: false,
+          linLogMode: false,
+          outboundAttractionDistribution: true,
+          barnesHutOptimize: true,
+          barnesHutTheta: 0.5,
+          slowDown: 15,
+        },
+      });
+      fresh.start();
+      layoutRef.current = fresh;
       setLayoutRunning(true);
+
+      // Auto-stop after 6s.
+      setTimeout(() => {
+        if (fresh.isRunning()) {
+          fresh.stop();
+          setLayoutRunning(false);
+        }
+      }, 6_000);
     }
   }, []);
 
   // Initialise Sigma and ForceAtlas2 when the Graphology graph is ready.
   useEffect(() => {
     const container = containerRef.current;
+    if (!container || !graphRef.current) return;
     const graph = graphRef.current;
-    if (!container || !graph) return;
 
     // Snapshot the current store values for the reducers. The refresh effect
     // below triggers sigma.refresh() whenever these change, which causes
@@ -347,7 +401,7 @@ export function GraphCanvas({ className }: GraphCanvasProps) {
       labelSize: 11,
       labelWeight: '500',
       labelColor: { color: '#8899aa' },
-      defaultEdgeColor: '#1e2a36',
+      defaultEdgeColor: '#2a3a4d',
       defaultNodeColor: '#4a5a6a',
       // Only show labels for nodes that are large enough (high degree).
       labelRenderedSizeThreshold: 12,
@@ -365,7 +419,6 @@ export function GraphCanvas({ className }: GraphCanvasProps) {
       nodeReducer: (node, data) => {
         const res = { ...data };
         const nodeType = (data.nodeType ?? '') as string;
-
         const state = useGraphStore.getState();
 
         if (!state.visibleNodeTypes.has(nodeType)) {
@@ -373,30 +426,46 @@ export function GraphCanvas({ className }: GraphCanvasProps) {
           return res;
         }
 
-        // Dim unrelated nodes when a node is selected.
+        // Set-based highlighting (file/folder/community/dead code).
+        if (state.highlightedNodeIds.size > 0) {
+          if (state.highlightedNodeIds.has(node)) {
+            res.size = (res.size ?? 3) * 1.3;
+            res.zIndex = 2;
+          } else {
+            res.color = '#141a22';
+            res.borderColor = '#141a22';
+            res.label = '';
+            res.zIndex = 0;
+          }
+          if (state.hoveredNodeId && node === state.hoveredNodeId) {
+            res.highlighted = true;
+            res.forceLabel = true;
+          }
+          return res;
+        }
+
+        // Single-node selection dimming.
         if (state.selectedNodeId && node !== state.selectedNodeId) {
           const isNeighbor =
             graph.hasEdge(state.selectedNodeId, node) ||
             graph.hasEdge(node, state.selectedNodeId);
           if (!isNeighbor) {
             res.color = '#141a22';
+            res.borderColor = '#141a22';
             res.label = '';
             res.zIndex = 0;
           } else {
-            // Connected neighbors stay visible and get a label.
             res.forceLabel = true;
             res.zIndex = 2;
           }
         }
 
-        // Selected node itself: brighten and force label.
         if (state.selectedNodeId && node === state.selectedNodeId) {
           res.highlighted = true;
           res.forceLabel = true;
           res.zIndex = 3;
         }
 
-        // Highlight on hover.
         if (state.hoveredNodeId && node === state.hoveredNodeId) {
           res.highlighted = true;
           res.forceLabel = true;
@@ -408,7 +477,6 @@ export function GraphCanvas({ className }: GraphCanvasProps) {
       edgeReducer: (edge, data) => {
         const res = { ...data };
         const edgeType = (data.edgeType ?? '') as string;
-
         const state = useGraphStore.getState();
 
         if (!state.visibleEdgeTypes.has(edgeType)) {
@@ -416,14 +484,26 @@ export function GraphCanvas({ className }: GraphCanvasProps) {
           return res;
         }
 
+        // Set-based highlighting: show edges between highlighted nodes.
+        if (state.highlightedNodeIds.size > 0) {
+          const source = graph.source(edge);
+          const target = graph.target(edge);
+          if (state.highlightedNodeIds.has(source) && state.highlightedNodeIds.has(target)) {
+            res.color = '#4488cc';
+            res.size = 1.2;
+          } else {
+            res.hidden = true;
+          }
+          return res;
+        }
+
+        // Single-node selection.
         if (state.selectedNodeId) {
           const source = graph.source(edge);
           const target = graph.target(edge);
           if (source !== state.selectedNodeId && target !== state.selectedNodeId) {
-            // Dim unconnected edges almost invisible.
             res.hidden = true;
           } else {
-            // Brighten connected edges.
             res.color = '#4488cc';
             res.size = 1.5;
           }
@@ -436,50 +516,92 @@ export function GraphCanvas({ className }: GraphCanvasProps) {
     sigmaRef.current = sigma;
     setSigmaReady(true);
 
-    // Wire up interaction events.
-    sigma.on('clickNode', ({ node }) => {
-      selectNode(node);
+    // ---------------------------------------------------------------
+    // Interaction events + node dragging
+    // ---------------------------------------------------------------
+    let draggedNode: string | null = null;
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    const DRAG_THRESHOLD = 5;
+
+    sigma.on('downNode', (e) => {
+      isDragging = true;
+      draggedNode = e.node;
+      graph.setNodeAttribute(draggedNode, 'fixed', true);
+      if (layoutRef.current?.isRunning()) layoutRef.current.stop();
+      sigma.getCamera().disable();
+    });
+
+    sigma.getMouseCaptor().on('mousemovebody', (e) => {
+      if (!isDragging || !draggedNode) return;
+      const pos = sigma.viewportToGraph(e);
+      graph.setNodeAttribute(draggedNode, 'x', pos.x);
+      graph.setNodeAttribute(draggedNode, 'y', pos.y);
+      e.preventSigmaDefault();
+      e.original.preventDefault();
+      e.original.stopPropagation();
+    });
+
+    sigma.getMouseCaptor().on('mousedown', (e) => {
+      dragStartX = e.x;
+      dragStartY = e.y;
+    });
+
+    sigma.getMouseCaptor().on('mouseup', (e) => {
+      if (draggedNode) {
+        const dx = Math.abs(e.x - dragStartX);
+        const dy = Math.abs(e.y - dragStartY);
+        if (dx < DRAG_THRESHOLD && dy < DRAG_THRESHOLD) {
+          selectNode(draggedNode);
+        }
+        graph.removeNodeAttribute(draggedNode, 'fixed');
+      }
+      isDragging = false;
+      draggedNode = null;
+      sigma.getCamera().enable();
     });
 
     sigma.on('clickStage', () => {
       selectNode(null);
+      useGraphStore.getState().setHighlightedNodes(new Set());
     });
 
     sigma.on('enterNode', ({ node }) => {
       setHoveredNode(node);
+      container.style.cursor = 'grab';
     });
 
     sigma.on('leaveNode', () => {
       setHoveredNode(null);
+      container.style.cursor = 'default';
     });
 
-    // Start ForceAtlas2 layout in a web worker.
-    // Tuned for ~2k–5k node graphs on a dark canvas:
-    //   - Higher scalingRatio (8) pushes nodes further apart
-    //   - Lower gravity (0.3) prevents tight clustering
-    //   - strongGravityMode keeps outliers from drifting to infinity
-    //   - barnesHutOptimize for O(n log n) performance
+    // ---------------------------------------------------------------
+    // ForceAtlas2 layout
+    // ---------------------------------------------------------------
     const layout = new FA2LayoutSupervisor(graph, {
       settings: {
-        gravity: 0.3,
-        scalingRatio: 8,
+        gravity: 1,
+        scalingRatio: 5,
         strongGravityMode: true,
+        linLogMode: false,
+        outboundAttractionDistribution: true,
         barnesHutOptimize: true,
         barnesHutTheta: 0.5,
-        slowDown: 3,
+        slowDown: 10,
       },
     });
     layout.start();
     layoutRef.current = layout;
     setLayoutRunning(true);
 
-    // Stop the layout after 30 seconds to save CPU.
     const timer = setTimeout(() => {
       if (layout.isRunning()) {
         layout.stop();
         setLayoutRunning(false);
       }
-    }, 30_000);
+    }, 6_000);
 
     return () => {
       clearTimeout(timer);
@@ -499,45 +621,78 @@ export function GraphCanvas({ className }: GraphCanvasProps) {
     const layout = layoutRef.current;
     if (!graph || !sigmaRef.current) return;
 
-    // Cancel any running position animation.
     cancelAnimationFrame(animFrameRef.current);
 
     if (layoutMode === 'force') {
-      // Re-enable ForceAtlas2. Start the web worker layout.
       if (layout && !layout.isRunning()) {
         layout.start();
         setLayoutRunning(true);
 
-        // Auto-stop after 30s again.
         const timer = setTimeout(() => {
           if (layout.isRunning()) {
             layout.stop();
             setLayoutRunning(false);
           }
-        }, 30_000);
+        }, 6_000);
 
         return () => clearTimeout(timer);
       }
     } else {
-      // Stop force layout when switching to tree or radial.
       if (layout && layout.isRunning()) {
         layout.stop();
         setLayoutRunning(false);
       }
 
-      const targets =
-        layoutMode === 'tree'
-          ? computeTreeLayout(graph)
-          : computeRadialLayout(graph);
+      let targets: PositionMap;
 
-      animFrameRef.current = animatePositions(graph, targets, 500);
+      if (layoutMode === 'tree') {
+        targets = computeTreeLayout(graph);
+      } else if (layoutMode === 'radial') {
+        targets = computeRadialLayout(graph, selectedNodeId);
+      } else if (layoutMode === 'community') {
+        // Use circlePack to group nodes by community attribute.
+        // Assign community from store data, falling back to directory.
+        const communities = useGraphStore.getState().communities;
+        const memberToCommunity = new Map<string, string>();
+        for (const c of communities) {
+          for (const memberId of c.members) {
+            memberToCommunity.set(memberId, c.id);
+          }
+        }
+
+        graph.forEachNode((id, attrs) => {
+          const communityId = memberToCommunity.get(id) ?? (attrs.directory as string) ?? 'unknown';
+          graph.setNodeAttribute(id, 'community', communityId);
+        });
+
+        circlePack.assign(graph, { hierarchyAttributes: ['community'], scale: 1000 });
+
+        // Read assigned positions into our PositionMap.
+        targets = new Map();
+        graph.forEachNode((id, attrs) => {
+          targets.set(id, { x: attrs.x as number, y: attrs.y as number });
+        });
+      } else {
+        // 'circular' layout — all nodes on a ring.
+        // Scale adapts to node count so nodes don't bunch up.
+        const nodeCount = graph.order;
+        const circularScale = Math.max(500, nodeCount * 2);
+        circular.assign(graph, { scale: circularScale });
+
+        targets = new Map();
+        graph.forEachNode((id, attrs) => {
+          targets.set(id, { x: attrs.x as number, y: attrs.y as number });
+        });
+      }
+
+      animatePositions(graph, targets, 500, animFrameRef);
     }
-  }, [layoutMode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [layoutMode, selectedNodeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Re-render Sigma when filters, selection, or hover state change.
   useEffect(() => {
     sigmaRef.current?.refresh();
-  }, [selectedNodeId, hoveredNodeId, visibleNodeTypes, visibleEdgeTypes]);
+  }, [selectedNodeId, hoveredNodeId, highlightedNodeIds, visibleNodeTypes, visibleEdgeTypes]);
 
   // Determine if the graph is empty (loaded but no nodes).
   const nodes = useGraphStore((s) => s.nodes);

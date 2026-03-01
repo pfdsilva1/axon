@@ -147,6 +147,8 @@ function filterNodes(nodes: FolderNode[], term: string): FolderNode[] {
 function TreeNode({ node, depth }: { node: FolderNode; depth: number }) {
   const [expanded, setExpanded] = useState(depth < 1);
   const selectNode = useGraphStore((s) => s.selectNode);
+  const setHighlightedNodes = useGraphStore((s) => s.setHighlightedNodes);
+  const highlightedNodeIds = useGraphStore((s) => s.highlightedNodeIds);
   const nodes = useGraphStore((s) => s.nodes);
 
   const isFolder = node.type === 'folder';
@@ -154,11 +156,42 @@ function TreeNode({ node, depth }: { node: FolderNode; depth: number }) {
   const handleClick = useCallback(() => {
     if (isFolder) {
       setExpanded((prev) => !prev);
+      // Highlight all nodes under this folder path.
+      const prefix = node.path.endsWith('/') ? node.path : node.path + '/';
+      const ids = new Set(
+        nodes.filter((n) => n.filePath?.startsWith(prefix)).map((n) => n.id),
+      );
+      // Toggle: if already highlighting the same set, clear it.
+      if (ids.size > 0 && highlightedNodeIds.size === ids.size) {
+        const allMatch = [...ids].every((id) => highlightedNodeIds.has(id));
+        if (allMatch) {
+          setHighlightedNodes(new Set());
+          return;
+        }
+      }
+      if (ids.size > 0) {
+        selectNode(null);
+        setHighlightedNodes(ids);
+      }
     } else {
-      // Select the file -- clear current selection first
-      selectNode(null);
+      // Highlight all nodes in this file.
+      const ids = new Set(
+        nodes.filter((n) => n.filePath === node.path).map((n) => n.id),
+      );
+      // Toggle: if already highlighting the same set, clear it.
+      if (ids.size > 0 && highlightedNodeIds.size === ids.size) {
+        const allMatch = [...ids].every((id) => highlightedNodeIds.has(id));
+        if (allMatch) {
+          setHighlightedNodes(new Set());
+          return;
+        }
+      }
+      if (ids.size > 0) {
+        selectNode(null);
+        setHighlightedNodes(ids);
+      }
     }
-  }, [isFolder, selectNode]);
+  }, [isFolder, selectNode, setHighlightedNodes, highlightedNodeIds, nodes, node.path]);
 
   // For file nodes, find symbols from the graph store matching this file path
   const fileSymbols = useMemo(() => {

@@ -333,8 +333,21 @@ class PythonParser(LanguageParser):
             if child.type == "import":
                 past_import = True
                 continue
-            if past_import and child.type == "dotted_name":
+            if not past_import:
+                continue
+            # Handle both bare names and parenthesized import lists.
+            if child.type in ("dotted_name", "identifier"):
                 names.append(child.text.decode("utf8"))
+            elif child.type == "import_as_names":
+                for sub in child.children:
+                    if sub.type in ("dotted_name", "identifier"):
+                        names.append(sub.text.decode("utf8"))
+                    elif sub.type == "aliased_import":
+                        name_node = sub.child_by_field_name("name")
+                        if name_node:
+                            names.append(name_node.text.decode("utf8"))
+            elif child.type == "wildcard_import":
+                names.append("*")
 
         result.imports.append(
             ImportInfo(

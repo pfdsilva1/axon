@@ -40,17 +40,17 @@
   --orange: #f0883e;
   --yellow: #d4a72c;
 
-  /* Graph Node Colors */
-  --node-function: #39d353;
-  --node-class: #58a6ff;
-  --node-method: #a371f7;
-  --node-interface: #3fb8af;
-  --node-typealias: #56d4dd;
-  --node-enum: #f0883e;
-  --node-file: #6b7d8e;
-  --node-folder: #4d5969;
-  --node-community: #a371f7;
-  --node-process: #3fb8af;
+  /* Graph Node Colors (One Dark Pro) */
+  --node-function: #61AFEF;
+  --node-class: #E5C07B;
+  --node-method: #56B6C2;
+  --node-interface: #C678DD;
+  --node-typealias: #98C379;
+  --node-enum: #E06C75;
+  --node-file: #636D83;
+  --node-folder: #4B5263;
+  --node-community: #BE85C8;
+  --node-process: #5EA8A0;
 
   /* Radius — terminal-sharp (spec 3.4) */
   --radius: 2px;

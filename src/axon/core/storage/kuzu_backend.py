@@ -52,6 +52,7 @@ _NODE_PROPERTIES = (
     "is_dead BOOL, "
     "is_entry_point BOOL, "
     "is_exported BOOL, "
+    "cohesion DOUBLE, "
     "PRIMARY KEY (id)"
 )
 
@@ -977,9 +978,10 @@ class KuzuBackend:
             f"content: $content, signature: $signature, "
             f"language: $language, class_name: $class_name, "
             f"is_dead: $is_dead, is_entry_point: $is_entry_point, "
-            f"is_exported: $is_exported"
+            f"is_exported: $is_exported, cohesion: $cohesion"
             f"}})"
         )
+        props = node.properties or {}
         params = {
             "id": node.id,
             "name": node.name,
@@ -993,6 +995,7 @@ class KuzuBackend:
             "is_dead": node.is_dead,
             "is_entry_point": node.is_entry_point,
             "is_exported": node.is_exported,
+            "cohesion": props.get("cohesion"),
         }
         try:
             self._conn.execute(query, parameters=params)

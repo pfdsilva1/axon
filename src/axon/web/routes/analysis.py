@@ -47,7 +47,7 @@ def get_dead_code(request: Request) -> dict:
     try:
         rows = storage.execute_raw(
             "MATCH (n) WHERE n.is_dead = true "
-            "RETURN n.id, n.name, n.file_path, n.start_line, labels(n) "
+            "RETURN n.id, n.name, n.file_path, n.start_line, label(n) "
             "ORDER BY n.file_path"
         )
     except Exception as exc:
@@ -76,7 +76,7 @@ def get_coupling(request: Request) -> dict:
 
     try:
         rows = storage.execute_raw(
-            "MATCH (a)-[r]->(b) WHERE r.rel_type = 'coupled_with' "
+            "MATCH (a)-[r:CodeRelation]->(b) WHERE r.rel_type = 'coupled_with' "
             "RETURN a.name, a.file_path, b.name, b.file_path, r.strength, r.co_changes"
         )
     except Exception as exc:
@@ -101,27 +101,41 @@ def get_communities(request: Request) -> dict:
     """Return community clusters with their member nodes."""
     storage = request.app.state.storage
 
+    has_cohesion = True
     try:
         rows = storage.execute_raw(
-            "MATCH (c) WHERE labels(c) = 'Community' "
-            "OPTIONAL MATCH (n)-[r]->(c) WHERE r.rel_type = 'member_of' "
+            "MATCH (c:Community) "
+            "OPTIONAL MATCH (n)-[r:CodeRelation]->(c) WHERE r.rel_type = 'member_of' "
             "RETURN c.id, c.name, c.cohesion, collect(n.id)"
         )
-    except Exception as exc:
-        logger.error("Communities query failed: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail="Communities query failed") from exc
+    except Exception:
+        # Existing DB may lack the cohesion column — fall back gracefully.
+        has_cohesion = False
+        try:
+            rows = storage.execute_raw(
+                "MATCH (c:Community) "
+                "OPTIONAL MATCH (n)-[r:CodeRelation]->(c) WHERE r.rel_type = 'member_of' "
+                "RETURN c.id, c.name, collect(n.id)"
+            )
+        except Exception as exc:
+            logger.error("Communities query failed: %s", exc, exc_info=True)
+            raise HTTPException(status_code=500, detail="Communities query failed") from exc
 
     if not rows:
         return {"communities": []}
 
     communities = []
     for row in rows:
-        cid, cname, cohesion, member_ids = row
+        if has_cohesion:
+            cid, cname, cohesion_val, member_ids = row
+        else:
+            cid, cname, member_ids = row
+            cohesion_val = None
         communities.append({
             "id": cid,
             "name": cname,
             "memberCount": len(member_ids) if member_ids else 0,
-            "cohesion": cohesion,
+            "cohesion": round(cohesion_val, 4) if cohesion_val is not None else None,
             "members": member_ids or [],
         })
 
@@ -137,10 +151,18 @@ def get_health(request: Request) -> dict:
 
     # Dead code score (25%): 100 - (dead / total * 100)
     try:
-        total_rows = storage.execute_raw("MATCH (n) WHERE n.start_line > 0 RETURN count(n)")
-        dead_rows = storage.execute_raw("MATCH (n) WHERE n.is_dead = true RETURN count(n)")
-        total_symbols = total_rows[0][0] if total_rows and total_rows[0] else 1
-        dead_count = dead_rows[0][0] if dead_rows and dead_rows[0] else 0
+        total_rows = storage.execute_raw(
+            "MATCH (n:Function) WHERE n.start_line > 0 RETURN count(n) "
+            "UNION ALL MATCH (n:Method) WHERE n.start_line > 0 RETURN count(n) "
+            "UNION ALL MATCH (n:Class) WHERE n.start_line > 0 RETURN count(n)"
+        )
+        dead_rows = storage.execute_raw(
+            "MATCH (n:Function) WHERE n.is_dead = true RETURN count(n) "
+            "UNION ALL MATCH (n:Method) WHERE n.is_dead = true RETURN count(n) "
+            "UNION ALL MATCH (n:Class) WHERE n.is_dead = true RETURN count(n)"
+        )
+        total_symbols = sum(r[0] for r in total_rows if r and r[0]) if total_rows else 1
+        dead_count = sum(r[0] for r in dead_rows if r and r[0]) if dead_rows else 0
         breakdown["deadCode"] = round(max(0.0, 100.0 - (dead_count / max(total_symbols, 1) * 100)), 1)
     except Exception:
         breakdown["deadCode"] = 100.0
@@ -148,7 +170,7 @@ def get_health(request: Request) -> dict:
     # Coupling score (20%): 100 - (high_coupling / total_coupling * 200)
     try:
         coupling_rows = storage.execute_raw(
-            "MATCH ()-[r]->() WHERE r.rel_type = 'coupled_with' "
+            "MATCH ()-[r:CodeRelation]->() WHERE r.rel_type = 'coupled_with' "
             "RETURN r.strength"
         )
         if coupling_rows:
@@ -165,7 +187,7 @@ def get_health(request: Request) -> dict:
     # Modularity score (20%): community count as proxy
     try:
         comm_rows = storage.execute_raw(
-            "MATCH (c) WHERE labels(c) = 'Community' RETURN count(c)"
+            "MATCH (c:Community) RETURN count(c)"
         )
         comm_count = comm_rows[0][0] if comm_rows and comm_rows[0] else 0
         # Heuristic: 3-15 communities is ideal; fewer or too many is worse
@@ -182,7 +204,7 @@ def get_health(request: Request) -> dict:
     # Confidence score (20%): avg(confidence) * 100 across CALLS edges
     try:
         conf_rows = storage.execute_raw(
-            "MATCH ()-[r]->() WHERE r.rel_type = 'calls' RETURN avg(r.confidence)"
+            "MATCH ()-[r:CodeRelation]->() WHERE r.rel_type = 'calls' RETURN avg(r.confidence)"
         )
         avg_conf = conf_rows[0][0] if conf_rows and conf_rows[0] and conf_rows[0][0] is not None else 0.8
         breakdown["confidence"] = round(min(100.0, avg_conf * 100), 1)
@@ -192,12 +214,14 @@ def get_health(request: Request) -> dict:
     # Coverage score (15%): symbols_in_processes / callable_symbols * 100
     try:
         callable_rows = storage.execute_raw(
-            "MATCH (n) WHERE labels(n) IN ['Function', 'Method'] RETURN count(n)"
+            "MATCH (n:Function) RETURN count(n) "
+            "UNION ALL MATCH (n:Method) RETURN count(n)"
         )
         process_member_rows = storage.execute_raw(
-            "MATCH (n)-[r]->() WHERE r.rel_type = 'step_in_process' RETURN count(DISTINCT n.id)"
+            "MATCH (n)-[r:CodeRelation]->() WHERE r.rel_type = 'step_in_process' "
+            "RETURN count(DISTINCT n.id)"
         )
-        callable_count = callable_rows[0][0] if callable_rows and callable_rows[0] else 1
+        callable_count = sum(r[0] for r in callable_rows if r and r[0]) if callable_rows else 1
         in_process = process_member_rows[0][0] if process_member_rows and process_member_rows[0] else 0
         breakdown["coverage"] = round(
             min(100.0, in_process / max(callable_count, 1) * 100), 1

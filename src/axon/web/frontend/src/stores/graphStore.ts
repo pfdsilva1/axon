@@ -22,7 +22,7 @@ interface GraphStore {
   visibleNodeTypes: Set<string>;
   visibleEdgeTypes: Set<string>;
   depthLimit: number | null;
-  layoutMode: 'force' | 'tree' | 'radial';
+  layoutMode: 'force' | 'tree' | 'radial' | 'community' | 'circular';
 
   // Display toggles
   hullsVisible: boolean;
@@ -43,7 +43,7 @@ interface GraphStore {
   toggleNodeType: (type: string) => void;
   toggleEdgeType: (type: string) => void;
   setDepthLimit: (depth: number | null) => void;
-  setLayoutMode: (mode: 'force' | 'tree' | 'radial') => void;
+  setLayoutMode: (mode: 'force' | 'tree' | 'radial' | 'community' | 'circular') => void;
   toggleHulls: () => void;
   toggleMinimap: () => void;
 }

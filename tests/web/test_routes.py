@@ -242,7 +242,7 @@ class TestOverviewEndpoint:
         data = response.json()
         assert data["totalNodes"] == 52
         assert data["totalEdges"] == 130
-        assert data["nodesByLabel"]["Function"] == 42
+        assert data["nodesByLabel"]["function"] == 42
         assert data["edgesByType"]["calls"] == 100
 
 
@@ -514,7 +514,7 @@ class TestCommunitiesEndpoint:
         self, mock_storage: MagicMock, client: TestClient
     ) -> None:
         mock_storage.execute_raw.return_value = [
-            ["community:auth", "Auth Module", 0.85, ["func:login", "func:register"]],
+            ["community:auth", "Auth Module", None, ["func:login", "func:register"]],
         ]
 
         response = client.get("/communities")
@@ -525,7 +525,7 @@ class TestCommunitiesEndpoint:
         assert comm["id"] == "community:auth"
         assert comm["name"] == "Auth Module"
         assert comm["memberCount"] == 2
-        assert comm["cohesion"] == 0.85
+        assert comm["cohesion"] is None
         assert len(comm["members"]) == 2
 
 
@@ -548,7 +548,7 @@ class TestProcessesEndpoint:
         self, mock_storage: MagicMock, client: TestClient
     ) -> None:
         mock_storage.execute_raw.return_value = [
-            ["process:login-flow", "Login Flow", "http",
+            ["process:login-flow", "Login Flow",
              ["func:validate", "func:auth"], [1, 2]],
         ]
 
@@ -558,7 +558,7 @@ class TestProcessesEndpoint:
         assert len(data["processes"]) == 1
         proc = data["processes"][0]
         assert proc["name"] == "Login Flow"
-        assert proc["kind"] == "http"
+        assert proc["kind"] is None
         assert proc["stepCount"] == 2
         assert len(proc["steps"]) == 2
         assert proc["steps"][0]["nodeId"] == "func:validate"

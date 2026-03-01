@@ -8,27 +8,22 @@
 import { MultiDirectedGraph } from 'graphology';
 import type { GraphNode, GraphEdge, NodeLabel } from '@/types';
 
-/**
- * Muted color palette tuned for dark backgrounds.
- * Lower saturation + moderate lightness = readable without visual noise.
- * Each color has a matching border tone (slightly brighter) set as `borderColor`.
- */
 const NODE_COLORS: Record<string, { fill: string; border: string }> = {
-  function: { fill: '#2a9d47', border: '#3dbf5a' },
-  class:    { fill: '#4488cc', border: '#5599dd' },
-  method:   { fill: '#8866bb', border: '#9977cc' },
-  interface:{ fill: '#3a9a90', border: '#4db3a8' },
-  type_alias:{ fill: '#4a9eaa', border: '#5cb3be' },
-  enum:     { fill: '#c07830', border: '#d48a42' },
-  file:     { fill: '#4a5a6a', border: '#5a6a7a' },
-  folder:   { fill: '#3a4550', border: '#4a5560' },
-  community:{ fill: '#7755aa', border: '#8866bb' },
-  process:  { fill: '#3a9a90', border: '#4db3a8' },
+  function:   { fill: '#61AFEF', border: '#7EC4FF' },
+  method:     { fill: '#56B6C2', border: '#73CAD4' },
+  class:      { fill: '#E5C07B', border: '#F0D192' },
+  interface:  { fill: '#C678DD', border: '#D899EA' },
+  type_alias: { fill: '#98C379', border: '#B0D494' },
+  enum:       { fill: '#E06C75', border: '#E98B93' },
+  file:       { fill: '#636D83', border: '#7A8494' },
+  folder:     { fill: '#4B5263', border: '#636D83' },
+  community:  { fill: '#BE85C8', border: '#D0A1D8' },
+  process:    { fill: '#5EA8A0', border: '#79BBB4' },
 };
 
 const DEFAULT_NODE_FILL = '#4a5a6a';
 const DEFAULT_NODE_BORDER = '#5a6a7a';
-const DEFAULT_EDGE_COLOR = '#1e2a36';
+const DEFAULT_EDGE_COLOR = '#2a3a4d';
 
 /**
  * Build a Graphology MultiDirectedGraph from raw API node/edge arrays.
@@ -50,8 +45,8 @@ export function buildGraphology(nodes: GraphNode[], edges: GraphEdge[]): MultiDi
     const palette = NODE_COLORS[node.label] ?? { fill: DEFAULT_NODE_FILL, border: DEFAULT_NODE_BORDER };
     graph.addNode(node.id, {
       label: node.name,
-      x: Math.random() * 1000,
-      y: Math.random() * 1000,
+      x: (Math.random() - 0.5) * 1000,
+      y: (Math.random() - 0.5) * 1000,
       size: 3,
       color: palette.fill,
       borderColor: palette.border,
@@ -65,6 +60,7 @@ export function buildGraphology(nodes: GraphNode[], edges: GraphEdge[]): MultiDi
       isDead: node.isDead,
       isEntryPoint: node.isEntryPoint,
       isExported: node.isExported,
+      directory: node.filePath ? node.filePath.split('/').slice(0, -1).join('/') : '',
     });
   }
 

@@ -18,9 +18,9 @@ def get_processes(request: Request) -> dict:
 
     try:
         rows = storage.execute_raw(
-            "MATCH (p) WHERE labels(p) = 'Process' "
-            "OPTIONAL MATCH (n)-[r]->(p) WHERE r.rel_type = 'step_in_process' "
-            "RETURN p.id, p.name, p.kind, collect(n.id), collect(r.step_number) "
+            "MATCH (p:Process) "
+            "OPTIONAL MATCH (n)-[r:CodeRelation]->(p) WHERE r.rel_type = 'step_in_process' "
+            "RETURN p.id, p.name, collect(n.id), collect(r.step_number) "
             "ORDER BY p.name"
         )
     except Exception as exc:
@@ -32,14 +32,14 @@ def get_processes(request: Request) -> dict:
 
     processes = []
     for row in rows:
-        _, pname, kind, node_ids, step_numbers = row
+        _, pname, node_ids, step_numbers = row
         steps = sorted(
             [{"nodeId": nid, "stepNumber": sn} for nid, sn in zip(node_ids or [], step_numbers or [])],
             key=lambda s: s["stepNumber"],
         )
         processes.append({
             "name": pname,
-            "kind": kind,
+            "kind": None,
             "stepCount": len(steps),
             "steps": steps,
         })

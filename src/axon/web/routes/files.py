@@ -61,7 +61,7 @@ def get_tree(request: Request) -> dict:
 
     try:
         file_rows = storage.execute_raw(
-            "MATCH (n) WHERE labels(n) = 'File' "
+            "MATCH (n:File) "
             "RETURN n.id, n.name, n.file_path, n.language"
         )
     except Exception:

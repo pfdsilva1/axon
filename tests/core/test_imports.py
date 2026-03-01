@@ -169,6 +169,76 @@ class TestResolvePythonParentRelative:
         assert result == expected_id
 
 
+class TestResolvePythonAbsoluteWithSourceRoot:
+    """Absolute imports in a src/ layout project find the correct file."""
+
+    def test_resolve_absolute_with_src_prefix(self) -> None:
+        """from auth.validate import check -> src/auth/validate.py."""
+        g = KnowledgeGraph()
+        for path in [
+            "src/auth/__init__.py",
+            "src/auth/validate.py",
+            "src/auth/utils.py",
+            "src/models/__init__.py",
+        ]:
+            g.add_node(
+                GraphNode(
+                    id=generate_id(NodeLabel.FILE, path),
+                    label=NodeLabel.FILE,
+                    name=path.rsplit("/", 1)[-1],
+                    file_path=path,
+                    language="python",
+                )
+            )
+        index = build_file_index(g)
+        from axon.core.ingestion.imports import _detect_source_roots
+        roots = _detect_source_roots(index)
+
+        imp = ImportInfo(module="auth.validate", names=["check"], is_relative=False)
+        result = resolve_import_path("src/auth/utils.py", imp, index, roots)
+
+        expected_id = generate_id(NodeLabel.FILE, "src/auth/validate.py")
+        assert result == expected_id
+
+    def test_resolve_absolute_package_init(self) -> None:
+        """from models import User -> src/models/__init__.py."""
+        g = KnowledgeGraph()
+        for path in [
+            "src/auth/__init__.py",
+            "src/auth/validate.py",
+            "src/models/__init__.py",
+        ]:
+            g.add_node(
+                GraphNode(
+                    id=generate_id(NodeLabel.FILE, path),
+                    label=NodeLabel.FILE,
+                    name=path.rsplit("/", 1)[-1],
+                    file_path=path,
+                    language="python",
+                )
+            )
+        index = build_file_index(g)
+        from axon.core.ingestion.imports import _detect_source_roots
+        roots = _detect_source_roots(index)
+
+        imp = ImportInfo(module="models", names=["User"], is_relative=False)
+        result = resolve_import_path("src/auth/validate.py", imp, index, roots)
+
+        expected_id = generate_id(NodeLabel.FILE, "src/models/__init__.py")
+        assert result == expected_id
+
+    def test_detect_source_roots(self) -> None:
+        """Source roots are detected from __init__.py presence."""
+        index = {
+            "src/mypackage/__init__.py": "id1",
+            "src/mypackage/core/__init__.py": "id2",
+            "src/mypackage/core/utils.py": "id3",
+        }
+        from axon.core.ingestion.imports import _detect_source_roots
+        roots = _detect_source_roots(index)
+        assert "src" in roots
+
+
 class TestResolvePythonExternal:
     """import os or from os.path import join -> returns None (external)."""
 

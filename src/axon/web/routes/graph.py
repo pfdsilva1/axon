@@ -104,9 +104,13 @@ def get_overview(request: Request) -> dict:
             "MATCH (n) RETURN labels(n), count(n) ORDER BY count(n) DESC"
         )
         for row in rows or []:
-            label = row[0] if row else "Unknown"
+            raw_label = row[0] if row else "Unknown"
+            if isinstance(raw_label, list) and raw_label:
+                label = raw_label[0].lower()
+            else:
+                label = str(raw_label).lower()
             count = row[1] if len(row) > 1 else 0
-            nodes_by_label[str(label)] = count
+            nodes_by_label[label] = count
             total_nodes += count
     except Exception:
         logger.warning("Failed to query node counts", exc_info=True)
@@ -115,7 +119,7 @@ def get_overview(request: Request) -> dict:
     total_edges = 0
     try:
         rows = storage.execute_raw(
-            "MATCH ()-[r]->() RETURN r.rel_type, count(r) ORDER BY count(r) DESC"
+            "MATCH ()-[r:CodeRelation]->() RETURN r.rel_type, count(r) ORDER BY count(r) DESC"
         )
         for row in rows or []:
             rel_type = row[0] if row else "Unknown"

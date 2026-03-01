@@ -34,10 +34,12 @@ const DEPTH_OPTIONS: { label: string; value: number | null }[] = [
   { label: 'All', value: null },
 ];
 
-const LAYOUT_OPTIONS: { label: string; value: 'force' | 'tree' | 'radial' }[] = [
+const LAYOUT_OPTIONS: { label: string; value: 'force' | 'tree' | 'radial' | 'community' | 'circular' }[] = [
   { label: 'Force', value: 'force' },
   { label: 'Tree', value: 'tree' },
   { label: 'Radial', value: 'radial' },
+  { label: 'Community', value: 'community' },
+  { label: 'Circular', value: 'circular' },
 ];
 
 export function Filters() {
@@ -119,7 +121,7 @@ export function Filters() {
 
       {/* Layout selector */}
       <Section title="Layout">
-        <div style={{ display: 'flex', gap: 4 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
           {LAYOUT_OPTIONS.map((opt) => {
             const isActive = layoutMode === opt.value;
             return (
