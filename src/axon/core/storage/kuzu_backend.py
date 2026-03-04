@@ -11,6 +11,8 @@ from __future__ import annotations
 import csv
 import hashlib
 import logging
+import os
+import stat
 import tempfile
 from collections import deque
 from pathlib import Path
@@ -374,6 +376,32 @@ class KuzuBackend:
         """Execute a raw Cypher query and return all result rows."""
         assert self._conn is not None
         result = self._conn.execute(query)
+        rows: list[list[Any]] = []
+        while result.has_next():
+            rows.append(result.get_next())
+        return rows
+
+    def execute_cypher_readonly(self, query: str) -> list[list[Any]]:
+        """Execute a Cypher query on a separate read-only connection.
+
+        Opens a short-lived read-only connection so the database itself
+        rejects any write operations, regardless of query content.
+        """
+        assert self._db is not None
+        conn = kuzu.Connection(self._db, read_only=True)
+        try:
+            result = conn.execute(query)
+            rows: list[list[Any]] = []
+            while result.has_next():
+                rows.append(result.get_next())
+            return rows
+        finally:
+            del conn
+
+    def execute_parameterized(self, query: str, parameters: dict[str, Any]) -> list[list[Any]]:
+        """Execute a parameterized Cypher query and return all result rows."""
+        assert self._conn is not None
+        result = self._conn.execute(query, parameters=parameters)
         rows: list[list[Any]] = []
         while result.has_next():
             rows.append(result.get_next())
@@ -820,17 +848,21 @@ class KuzuBackend:
     def _csv_copy(self, table: str, rows: list[list[Any]]) -> None:
         """Write *rows* to a temporary CSV and COPY FROM into *table*.
 
-        Always cleans up the temp file, even on failure.
+        The temp file is created with owner-only permissions (0o600) and
+        always cleaned up, even on failure.
         """
         assert self._conn is not None
         csv_path: str | None = None
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".csv", delete=False, newline=""
-            ) as f:
-                writer = csv.writer(f)
-                writer.writerows(rows)
-                csv_path = f.name
+            fd, csv_path = tempfile.mkstemp(suffix=".csv")
+            try:
+                os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
+                with os.fdopen(fd, "w", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerows(rows)
+            except Exception:
+                os.close(fd)
+                raise
             self._conn.execute(f'COPY {table} FROM "{csv_path}" (HEADER=false)')
         finally:
             if csv_path:
