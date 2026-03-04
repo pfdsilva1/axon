@@ -23,6 +23,8 @@ from axon.core.parsers.base import ImportInfo
 logger = logging.getLogger(__name__)
 
 _JS_TS_EXTENSIONS = (".ts", ".js", ".tsx", ".jsx")
+_GO_STDLIB_DOMAINS = frozenset({"golang.org", "google.golang.org", "gopkg.in"})
+_DART_EXTENSIONS = (".dart",)
 
 def build_file_index(graph: KnowledgeGraph) -> dict[str, str]:
     """Build an index mapping file paths to their graph node IDs.
@@ -66,6 +68,10 @@ def resolve_import_path(
         return _resolve_python(importing_file, import_info, file_index)
     if language in ("typescript", "javascript"):
         return _resolve_js_ts(importing_file, import_info, file_index)
+    if language == "go":
+        return _resolve_go(importing_file, import_info, file_index)
+    if language == "dart":
+        return _resolve_dart(importing_file, import_info, file_index)
 
     return None
 
@@ -119,6 +125,10 @@ def _detect_language(file_path: str) -> str:
         return "typescript"
     if suffix in (".js", ".jsx"):
         return "javascript"
+    if suffix == ".go":
+        return "go"
+    if suffix == ".dart":
+        return "dart"
     return ""
 
 def _resolve_python(
@@ -228,6 +238,104 @@ def _resolve_js_ts(
     resolved_str = str(PurePosixPath(*resolved.parts))
 
     return _try_js_ts_paths(resolved_str, file_index)
+
+def _resolve_go(
+    importing_file: str,
+    import_info: ImportInfo,
+    file_index: dict[str, str],
+) -> str | None:
+    """Resolve a Go import path to a file node ID.
+
+    Go uses absolute module paths only (no relative imports).  Standard
+    library imports (single-word or ``pkg/subpkg`` without a domain) and
+    well-known third-party domains are treated as external and skipped.
+    For project-internal paths the last segment of the import path is used
+    to locate a matching directory in the file index.
+
+    Examples::
+
+        "fmt"                    -> external (stdlib single word)
+        "net/http"               -> external (stdlib multi-segment, no domain)
+        "github.com/user/pkg"    -> external (third-party domain)
+        "myapp/models"           -> look for files under models/
+    """
+    module = import_info.module
+
+    # External: starts with a known third-party domain.
+    first_segment = module.split("/")[0]
+    if "." in first_segment:
+        return None
+
+    # External: stdlib (no domain, single word or stdlib paths like "net/http").
+    # Heuristic: if none of the path segments look like an internal package
+    # (i.e. no segment matches any top-level directory in the file index),
+    # treat as stdlib/external.
+    last_segment = module.rsplit("/", 1)[-1]
+
+    # Try to find files inside a directory named after the last path segment.
+    for file_path in file_index:
+        parts = PurePosixPath(file_path).parts
+        # Check if the last segment of the import matches any directory component.
+        if last_segment in parts[:-1]:  # directory match (not the file name itself)
+            return file_index[file_path]
+
+    return None
+
+
+def _resolve_dart(
+    importing_file: str,
+    import_info: ImportInfo,
+    file_index: dict[str, str],
+) -> str | None:
+    """Resolve a Dart import to a file node ID.
+
+    Handles three import forms:
+
+    * ``dart:async`` — Dart core library, always external.
+    * ``package:flutter/material.dart`` — external Flutter/pub package.
+    * ``package:myapp/...`` — same-project package import; resolved by
+      stripping the ``package:<name>/`` prefix and looking up the remainder
+      as a relative path from the project root.
+    * Relative imports (``./helper.dart``, ``../utils.dart``) — resolved
+      against the importing file's directory, identical to JS/TS resolution.
+    """
+    module = import_info.module
+
+    # Dart core library — always external.
+    if module.startswith("dart:"):
+        return None
+
+    # Relative import — resolve like JS/TS.
+    if module.startswith("."):
+        base = PurePosixPath(importing_file).parent
+        resolved = str(base / module)
+        if resolved in file_index:
+            return file_index[resolved]
+        return None
+
+    # package: import
+    if module.startswith("package:"):
+        remainder = module[len("package:"):]
+        # Drop the package name (first segment) to get the path within lib/.
+        # e.g. "package:myapp/models/user.dart" -> "models/user.dart"
+        slash_idx = remainder.find("/")
+        if slash_idx == -1:
+            return None
+        inner_path = remainder[slash_idx + 1:]
+
+        # Direct lookup.
+        if inner_path in file_index:
+            return file_index[inner_path]
+
+        # Try under lib/ (common Dart project layout).
+        lib_path = f"lib/{inner_path}"
+        if lib_path in file_index:
+            return file_index[lib_path]
+
+        return None
+
+    return None
+
 
 def _try_js_ts_paths(base_path: str, file_index: dict[str, str]) -> str | None:
     """Try common JS/TS file resolution patterns for *base_path*.

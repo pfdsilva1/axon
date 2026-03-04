@@ -153,6 +153,12 @@ class TestGetLanguage:
     def test_javascript_cjs(self) -> None:
         assert get_language("config.cjs") == "javascript"
 
+    def test_go(self) -> None:
+        assert get_language("main.go") == "go"
+
+    def test_dart(self) -> None:
+        assert get_language("widget.dart") == "dart"
+
     def test_unsupported_md(self) -> None:
         assert get_language("README.md") is None
 
@@ -180,6 +186,12 @@ class TestIsSupported:
 
     def test_not_supported_md(self) -> None:
         assert is_supported("README.md") is False
+
+    def test_supported_go(self) -> None:
+        assert is_supported("main.go") is True
+
+    def test_supported_dart(self) -> None:
+        assert is_supported("widget.dart") is True
 
     def test_not_supported_json(self) -> None:
         assert is_supported("data.json") is False
