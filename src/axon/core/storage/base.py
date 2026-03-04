@@ -127,6 +127,10 @@ class StorageBackend(Protocol):
         """Execute a raw backend-specific query string."""
         ...
 
+    def execute_parameterized(self, query: str, parameters: dict[str, Any]) -> Any:
+        """Execute a parameterized backend-specific query."""
+        ...
+
     def exact_name_search(self, name: str, limit: int = 5) -> list[SearchResult]:
         """Search for nodes with an exact name match."""
         ...

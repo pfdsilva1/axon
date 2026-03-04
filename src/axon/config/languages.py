@@ -12,6 +12,8 @@ SUPPORTED_EXTENSIONS: dict[str, str] = {
     ".jsx": "javascript",
     ".mjs": "javascript",
     ".cjs": "javascript",
+    ".go": "go",
+    ".dart": "dart",
 }
 
 def get_language(file_path: str | Path) -> str | None:

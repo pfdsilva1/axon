@@ -33,6 +33,15 @@ _KIND_TO_LABEL: dict[str, NodeLabel] = {
     "interface": NodeLabel.INTERFACE,
     "type_alias": NodeLabel.TYPE_ALIAS,
     "enum": NodeLabel.ENUM,
+    # Dart/Flutter-specific kinds mapped to closest graph labels.
+    "constructor": NodeLabel.METHOD,
+    "factory_constructor": NodeLabel.METHOD,
+    "getter": NodeLabel.METHOD,
+    "setter": NodeLabel.METHOD,
+    "abstract_class": NodeLabel.CLASS,
+    "mixin": NodeLabel.CLASS,
+    "extension": NodeLabel.CLASS,
+    "typedef": NodeLabel.TYPE_ALIAS,
 }
 
 @dataclass
@@ -52,7 +61,7 @@ def get_parser(language: str) -> LanguageParser:
     of tree-sitter ``Parser`` objects.
 
     Args:
-        language: One of ``"python"``, ``"typescript"``, or ``"javascript"``.
+        language: One of ``"python"``, ``"typescript"``, ``"javascript"``, ``"go"``, or ``"dart"``.
 
     Returns:
         A :class:`LanguageParser` instance ready to parse source code.
@@ -79,10 +88,20 @@ def get_parser(language: str) -> LanguageParser:
 
         parser = TypeScriptParser(dialect="javascript")
 
+    elif language == "go":
+        from axon.core.parsers.go import GoParser
+
+        parser = GoParser()
+
+    elif language == "dart":
+        from axon.core.parsers.dart import DartParser
+
+        parser = DartParser()
+
     else:
         raise ValueError(
             f"Unsupported language {language!r}. "
-            f"Expected one of: python, typescript, javascript"
+            f"Expected one of: python, typescript, javascript, go, dart"
         )
 
     _PARSER_CACHE[language] = parser

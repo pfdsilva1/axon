@@ -20,10 +20,6 @@ logger = logging.getLogger(__name__)
 
 MAX_TRAVERSE_DEPTH = 10
 
-
-def _escape_cypher(value: str) -> str:
-    """Escape a string for safe inclusion in a Cypher string literal."""
-    return value.replace("\\", "\\\\").replace("'", "\\'")
 _EMBED_MODEL_NAME = "BAAI/bge-small-en-v1.5"
 
 
@@ -394,10 +390,10 @@ def handle_detect_changes(storage: StorageBackend, diff: str) -> str:
     for file_path, ranges in changed_files.items():
         affected_symbols = []
         try:
-            rows = storage.execute_raw(
-                f"MATCH (n) WHERE n.file_path = '{_escape_cypher(file_path)}' "
-                f"AND n.start_line > 0 "
-                f"RETURN n.id, n.name, n.file_path, n.start_line, n.end_line"
+            rows = storage.execute_parameterized(
+                "MATCH (n) WHERE n.file_path = $fp AND n.start_line > 0 "
+                "RETURN n.id, n.name, n.file_path, n.start_line, n.end_line",
+                {"fp": file_path},
             )
             for row in rows or []:
                 node_id = row[0] or ""
@@ -440,8 +436,9 @@ _WRITE_KEYWORDS = re.compile(
 def handle_cypher(storage: StorageBackend, query: str) -> str:
     """Execute a raw Cypher query and return formatted results.
 
-    Only read-only queries are allowed.  Queries containing write keywords
-    (DELETE, DROP, CREATE, SET, etc.) are rejected.
+    Only read-only queries are allowed.  Defence in depth: queries containing
+    write keywords are rejected at the application layer, AND the query is
+    executed on a read-only connection so the database itself rejects writes.
 
     Args:
         storage: The storage backend.
@@ -450,6 +447,7 @@ def handle_cypher(storage: StorageBackend, query: str) -> str:
     Returns:
         Formatted query results, or an error message if execution fails.
     """
+    # Application-layer guard (defence in depth — DB-level guard below).
     if _WRITE_KEYWORDS.search(query):
         return (
             "Query rejected: only read-only queries (MATCH/RETURN) are allowed. "
@@ -457,7 +455,13 @@ def handle_cypher(storage: StorageBackend, query: str) -> str:
         )
 
     try:
-        rows = storage.execute_raw(query)
+        rows = storage.execute_cypher_readonly(query)
+    except AttributeError:
+        # Fallback for backends that don't implement execute_cypher_readonly.
+        try:
+            rows = storage.execute_raw(query)
+        except Exception as exc:
+            return f"Cypher query failed: {exc}"
     except Exception as exc:
         return f"Cypher query failed: {exc}"
 

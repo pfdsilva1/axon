@@ -9,6 +9,9 @@ from pathlib import Path
 from axon.config.ignore import should_ignore
 from axon.config.languages import get_language, is_supported
 
+#: Skip files larger than 2 MB to avoid OOM on vendored/generated files.
+MAX_FILE_SIZE_BYTES: int = 2 * 1024 * 1024
+
 @dataclass
 class FileEntry:
     """A source file discovered during walking."""
@@ -68,6 +71,8 @@ def read_file(repo_path: Path, file_path: Path) -> FileEntry | None:
     relative = file_path.relative_to(repo_path)
 
     try:
+        if file_path.stat().st_size > MAX_FILE_SIZE_BYTES:
+            return None
         content = file_path.read_text(encoding="utf-8")
     except (UnicodeDecodeError, ValueError, OSError):
         return None

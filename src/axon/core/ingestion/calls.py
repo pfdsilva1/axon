@@ -74,6 +74,11 @@ _CALL_BLOCKLIST: frozenset[str] = frozenset({
     "useState", "useEffect", "useRef", "useCallback", "useMemo",
     "useContext", "useReducer", "useLayoutEffect", "useImperativeHandle",
     "useDebugValue", "useId", "useTransition", "useDeferredValue",
+    # Go builtins
+    "append", "cap", "close", "complex", "copy", "delete", "imag", "len",
+    "make", "new", "panic", "print", "println", "real", "recover",
+    # Dart builtins
+    "debugPrint", "identical", "print",
 })
 
 def resolve_call(
