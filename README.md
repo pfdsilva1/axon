@@ -123,6 +123,8 @@ Not just "zero callers" — a multi-pass analysis that understands your framewor
 Detects entry points using framework-aware patterns:
 - **Python**: `@app.route`, `@router.get`, `@click.command`, `test_*` functions, `__main__` blocks
 - **JavaScript/TypeScript**: Express handlers, exported functions, `handler`/`middleware` patterns
+- **Go**: `func main()`, `http.HandleFunc`, `gin.Default`, test functions (`Test*`)
+- **Dart**: `void main()`, Flutter widget `build` methods, `@override` entry points
 
 Then traces BFS execution flows from each entry point through the call graph, classifying flows as intra-community or cross-community.
 
@@ -184,7 +186,7 @@ Symbols removed (1):
 
 **Noise Filtering**
 
-Built-in blocklist (138 entries) automatically filters language builtins (`print`, `len`, `isinstance`), JS/TS globals (`console`, `setTimeout`, `fetch`), React hooks (`useState`, `useEffect`), and common stdlib methods from the call graph. Your graph shows *your* code's relationships, not noise from `list.append()`.
+Built-in blocklist automatically filters language builtins (`print`, `len`, `isinstance`), JS/TS globals (`console`, `setTimeout`, `fetch`), React hooks (`useState`, `useEffect`), Go builtins (`make`, `append`, `close`, `panic`), Dart/Flutter builtins (`setState`, `print`, `debugPrint`), and common stdlib methods from the call graph. Your graph shows *your* code's relationships, not noise from `list.append()`.
 
 ---
 
@@ -196,7 +198,7 @@ Axon builds deep structural understanding through 12 sequential analysis phases:
 |-------|-------------|
 | **File Walking** | Walks repo respecting `.gitignore`, filters by supported languages |
 | **Structure** | Creates File/Folder hierarchy with CONTAINS relationships |
-| **Parsing** | tree-sitter AST extraction — functions, classes, methods, interfaces, enums, type aliases |
+| **Parsing** | tree-sitter AST extraction — functions, classes, methods, interfaces, structs, enums, type aliases, mixins |
 | **Import Resolution** | Resolves import statements to actual files (relative, absolute, bare specifiers) |
 | **Call Tracing** | Maps function calls with confidence scores. Noise filtering skips 138 language builtins |
 | **Heritage** | Tracks class inheritance (EXTENDS) and interface implementation (IMPLEMENTS) |
@@ -299,6 +301,8 @@ impact  -> "Tip: Review each affected symbol before making changes."
 | Python | `.py` | tree-sitter-python |
 | TypeScript | `.ts`, `.tsx` | tree-sitter-typescript |
 | JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` | tree-sitter-javascript |
+| Go | `.go` | tree-sitter-go |
+| Dart | `.dart` | tree-sitter-dart (via language-pack) |
 
 ---
 
@@ -449,7 +453,7 @@ Examples:
 ## Architecture
 
 ```
-Source Code (.py, .ts, .js, .tsx, .jsx)
+Source Code (.py, .ts, .js, .tsx, .jsx, .go, .dart)
     |
     v
 +----------------------------------------------+
