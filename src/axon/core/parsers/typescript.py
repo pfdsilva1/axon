@@ -102,6 +102,8 @@ class TypeScriptParser(LanguageParser):
             self._extract_interface(node, source, result)
         elif ntype == "type_alias_declaration":
             self._extract_type_alias(node, source, result)
+        elif ntype == "enum_declaration":
+            self._extract_enum(node, source, result)
         elif ntype == "import_statement":
             self._extract_import(node, source, result)
         elif ntype == "call_expression":
@@ -130,6 +132,7 @@ class TypeScriptParser(LanguageParser):
                 "class_declaration",
                 "interface_declaration",
                 "type_alias_declaration",
+                "enum_declaration",
             ):
                 name_node = child.child_by_field_name("name")
                 if name_node is not None:
@@ -432,6 +435,22 @@ class TypeScriptParser(LanguageParser):
             )
         )
 
+    def _extract_enum(self, node: Node, source: str, result: ParseResult) -> None:
+        name_node = node.child_by_field_name("name")
+        if name_node is None:
+            return
+
+        name = name_node.text.decode()
+        result.symbols.append(
+            SymbolInfo(
+                name=name,
+                kind="enum",
+                start_line=node.start_point[0] + 1,
+                end_line=node.end_point[0] + 1,
+                content=node.text.decode(),
+            )
+        )
+
     def _extract_import(self, node: Node, source: str, result: ParseResult) -> None:
         """Handle ES module import statements."""
         module_str = ""
@@ -581,10 +600,11 @@ class TypeScriptParser(LanguageParser):
                             if sub.type == "identifier":
                                 param_name_node = sub
                                 break
-                    if param_name_node is None:
-                        continue
 
-                    param_name = param_name_node.text.decode()
+                    # For destructured params ({ title, onClose }: Props),
+                    # param_name_node is None but the type_annotation is
+                    # still present and should be extracted.
+                    param_name = param_name_node.text.decode() if param_name_node else ""
 
                     for sub in param.children:
                         if sub.type == "type_annotation":

@@ -375,3 +375,119 @@ module.exports = { Foo, Bar };
 
     assert "Foo" in result.exports
     assert "Bar" in result.exports
+
+
+# ---------------------------------------------------------------------------
+# Enum handling
+# ---------------------------------------------------------------------------
+
+
+def test_parse_enum(ts_parser: TypeScriptParser) -> None:
+    code = """\
+enum JobStatus {
+    Open = "open",
+    Closed = "closed",
+    Expired = "expired",
+}
+"""
+    result = ts_parser.parse(code, "types.ts")
+
+    enums = [s for s in result.symbols if s.kind == "enum"]
+    assert len(enums) == 1
+    assert enums[0].name == "JobStatus"
+    assert enums[0].start_line == 1
+    assert enums[0].end_line == 5
+
+
+def test_parse_exported_enum(ts_parser: TypeScriptParser) -> None:
+    code = """\
+export enum UserRole {
+    Admin = "admin",
+    User = "user",
+}
+"""
+    result = ts_parser.parse(code, "roles.ts")
+
+    enums = [s for s in result.symbols if s.kind == "enum"]
+    assert len(enums) == 1
+    assert enums[0].name == "UserRole"
+    assert "UserRole" in result.exports
+
+
+def test_parse_const_enum(ts_parser: TypeScriptParser) -> None:
+    code = """\
+const enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+"""
+    result = ts_parser.parse(code, "direction.ts")
+
+    enums = [s for s in result.symbols if s.kind == "enum"]
+    assert len(enums) == 1
+    assert enums[0].name == "Direction"
+
+
+# ---------------------------------------------------------------------------
+# Destructured parameter type refs
+# ---------------------------------------------------------------------------
+
+
+def test_destructured_param_type(ts_parser: TypeScriptParser) -> None:
+    """``({ title, onClose }: Props)`` extracts Props as a param type ref."""
+    code = """\
+function Modal({ title, onClose }: Props) {
+    return null;
+}
+"""
+    result = ts_parser.parse(code, "Modal.tsx")
+
+    param_refs = [t for t in result.type_refs if t.kind == "param"]
+    assert len(param_refs) == 1
+    assert param_refs[0].name == "Props"
+    assert param_refs[0].param_name == ""  # no single param name for destructured
+
+
+def test_destructured_param_with_regular_params(ts_parser: TypeScriptParser) -> None:
+    """Mixed destructured and regular params both extract types."""
+    code = """\
+function setup({ config }: Options, logger: Logger) {
+    return null;
+}
+"""
+    result = ts_parser.parse(code, "setup.ts")
+
+    param_refs = [t for t in result.type_refs if t.kind == "param"]
+    type_names = {t.name for t in param_refs}
+    assert "Options" in type_names
+    assert "Logger" in type_names
+
+
+def test_react_component_destructured_props(ts_parser: TypeScriptParser) -> None:
+    """Real React pattern: component with destructured props type."""
+    code = """\
+interface JobCardProps {
+    title: string;
+    status: string;
+    onSelect: () => void;
+}
+
+export function JobCard({ title, status, onSelect }: JobCardProps) {
+    return <div onClick={onSelect}>{title} - {status}</div>;
+}
+"""
+    result = ts_parser.parse(code, "JobCard.tsx")
+
+    # Interface should be captured
+    interfaces = [s for s in result.symbols if s.kind == "interface"]
+    assert any(i.name == "JobCardProps" for i in interfaces)
+
+    # Function should be captured
+    functions = [s for s in result.symbols if s.kind == "function"]
+    assert any(f.name == "JobCard" for f in functions)
+
+    # JobCardProps should appear as a param type ref
+    param_refs = [t for t in result.type_refs if t.kind == "param"]
+    assert any(t.name == "JobCardProps" for t in param_refs)
